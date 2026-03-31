@@ -94,7 +94,7 @@ interface CachedChapter {
 }
 
 const chapterCache = new Map<number, CachedChapter>();
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 const MAX_CACHE_SIZE = 10; // Maximum cached chapters
 
 // Cleanup old cache entries
