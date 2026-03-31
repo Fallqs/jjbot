@@ -1,0 +1,1 @@
+call C:\Users\27382\miniconda3\Scripts\activate.bat
