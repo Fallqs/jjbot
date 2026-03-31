@@ -217,32 +217,62 @@ function extractChapterContent(doc: Document, htmlText: string): { title: string
 }
 
 export async function fetchChapter(novelId: string, chapterId: number, isVip = false): Promise<Chapter> {
-  const { doc, htmlText } = await fetchHtml(`/onebook.php?novelid=${novelId}&chapterid=${chapterId}`, isVip);
+  // Always try www.jjwxc.net first - some chapters marked as VIP may actually be free previews,
+  // and free chapter pages can contain "购买"/"充值" in ads/navigation causing false positives.
+  const wwwResult = await fetchHtml(`/onebook.php?novelid=${novelId}&chapterid=${chapterId}`, false);
+  let extracted = extractChapterContent(wwwResult.doc, wwwResult.htmlText);
 
-  // Check for login/purchase requirements
+  if (extracted) {
+    return {
+      id: chapterId,
+      title: extracted.title || `第${chapterId}章`,
+      content: extracted.content,
+      isVip,
+    };
+  }
+
+  // Content extraction failed - determine why and handle VIP chapters
+  const htmlText = wwwResult.htmlText;
+
   if (htmlText.includes('用户登入') || htmlText.includes('晋江文学城[用户登入]')) {
     throw new Error('需要登录：该章节为 VIP 章节，请在设置中粘贴晋江文学城的登录 Cookie');
   }
+
+  const isVipRedirect = htmlText.includes('onebook_vip.php') || htmlText.includes('jjwxc.net/backend/buynovel');
+
+  if (isVipRedirect && getJjwxcCookie()) {
+    try {
+      const vipResult = await fetchHtml(`/onebook_vip.php?novelid=${novelId}&chapterid=${chapterId}`, true);
+      const vipExtracted = extractChapterContent(vipResult.doc, vipResult.htmlText);
+      if (vipExtracted) {
+        return {
+          id: chapterId,
+          title: vipExtracted.title || `第${chapterId}章`,
+          content: vipExtracted.content,
+          isVip,
+        };
+      }
+      if (vipResult.htmlText.includes('用户登入') || vipResult.htmlText.includes('晋江文学城[用户登入]')) {
+        throw new Error('需要登录：该章节为 VIP 章节，请在设置中粘贴晋江文学城的登录 Cookie');
+      }
+      if (vipResult.htmlText.includes('购买') && (vipResult.htmlText.includes('充值') || vipResult.htmlText.includes('订阅'))) {
+        throw new Error('需要购买：该章节为 VIP 章节，请在官网购买后重试');
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('HTTP')) {
+        throw new Error('VIP 章节加载失败：' + err.message);
+      }
+      throw err;
+    }
+  }
+
+  if (isVipRedirect) {
+    throw new Error('VIP 章节：请在官网购买此章节，然后在设置中粘贴 Cookie 后阅读');
+  }
+
   if (htmlText.includes('购买') && (htmlText.includes('充值') || htmlText.includes('订阅'))) {
     throw new Error('需要购买：该章节为 VIP 章节，请在官网购买后重试');
   }
 
-  // Check for VIP redirect
-  if (htmlText.includes('onebook_vip.php') || htmlText.includes('jjwxc.net/backend/buynovel')) {
-    throw new Error('VIP 章节：请在官网购买此章节，然后在设置中粘贴 Cookie 后阅读');
-  }
-
-  // Try to extract content
-  const extracted = extractChapterContent(doc, htmlText);
-
-  if (!extracted) {
-    throw new Error('无法解析章节内容，页面结构可能已更改');
-  }
-
-  return {
-    id: chapterId,
-    title: extracted.title || `第${chapterId}章`,
-    content: extracted.content,
-    isVip,
-  };
+  throw new Error('无法解析章节内容，页面结构可能已更改');
 }
