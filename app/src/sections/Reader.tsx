@@ -52,6 +52,12 @@ interface ReaderSettings {
   theme: Theme;
 }
 
+interface VipRenderData {
+  contentHtml: string;
+  styles: string;
+  title: string;
+}
+
 const themes = {
   light: {
     bg: 'bg-white',
@@ -86,7 +92,7 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
-  const [renderData, setRenderData] = useState<{ contentHtml: string; styles: string } | null>(null);
+  const [vipRenderData, setVipRenderData] = useState<VipRenderData | null>(null);
   const [cookieValue, setCookieValue] = useState(getJjwxcCookie());
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
   const [cookieParseInfo, setCookieParseInfo] = useState<{ format: string; total: number; jjwxcCount: number } | null>(null);
@@ -110,25 +116,30 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
     const loadChapter = async () => {
       setLoading(true);
       setError(null);
-      setRenderData(null); // Clear previous render data
+      setVipRenderData(null);
+      setChapterContent('');
+      
       try {
+        // Check for VIP render data from window (set by fetchVipChapterWithPuppeteer)
+        const win = window as Window & { __vipRenderData?: VipRenderData };
+        if (win.__vipRenderData) {
+          console.log('Found VIP render data in window');
+          setVipRenderData(win.__vipRenderData);
+          setChapterTitle(win.__vipRenderData.title || `第${currentChapter}章`);
+          delete win.__vipRenderData;
+          setLoading(false);
+          return;
+        }
+        
         const chapter = await fetchChapter(novelId, currentChapter, currentChapterInfo?.isVip);
         
-        // Check for render mode marker
-        if (chapter.content === '[VIP_RENDER]') {
-          // Get render data from window
-          const win = window as Window & { __vipRenderData?: { contentHtml: string; styles: string; title: string } };
-          if (win.__vipRenderData) {
-            setRenderData({
-              contentHtml: win.__vipRenderData.contentHtml,
-              styles: win.__vipRenderData.styles
-            });
-            setChapterTitle(win.__vipRenderData.title || chapter.title);
-            setChapterContent(''); // Content is rendered via HTML
-          } else {
-            setError('渲染数据加载失败');
-          }
-          delete win.__vipRenderData;
+        // Check if we got render data from the fetch
+        if ((window as Window & { __vipRenderData?: VipRenderData }).__vipRenderData) {
+          const renderData = (window as Window & { __vipRenderData?: VipRenderData }).__vipRenderData!;
+          console.log('Found VIP render data after fetch');
+          setVipRenderData(renderData);
+          setChapterTitle(renderData.title || chapter.title);
+          delete (window as Window & { __vipRenderData?: VipRenderData }).__vipRenderData;
         } else {
           setChapterContent(chapter.content);
           setChapterTitle(chapter.title);
@@ -537,7 +548,7 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
 
             {!loading && !error && (
               <>
-                {renderData ? (
+                {vipRenderData ? (
                   // VIP Render Mode: inject HTML with font styles
                   <div 
                     className="vip-rendered-content"
@@ -546,7 +557,7 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
                       lineHeight: settings.lineHeight,
                     }}
                     dangerouslySetInnerHTML={{ 
-                      __html: `<style>${renderData.styles}</style>${renderData.contentHtml}` 
+                      __html: `<style>${vipRenderData.styles}</style>${vipRenderData.contentHtml}` 
                     }}
                   />
                 ) : (

@@ -212,10 +212,17 @@ app.get('/api/vip-render', async (req, res) => {
       'url(/proxy-font/$1)'
     );
     
+    // Wrap content with font class if available
+    let wrappedContent = renderData.contentHtml;
+    if (renderData.fontClass && !renderData.contentHtml.includes(renderData.fontClass)) {
+      // The font class is not on the content itself, wrap it
+      wrappedContent = `<div class="noveltext ${renderData.fontClass}" style="font-family: '${renderData.fontClass}', 'Microsoft YaHei', serif; font-size: 16px; line-height: 1.8;">${renderData.contentHtml}</div>`;
+    }
+    
     res.json({
       success: true,
       title: renderData.title,
-      contentHtml: renderData.contentHtml,
+      contentHtml: wrappedContent,
       styles: modifiedStyles,
       fontClass: renderData.fontClass
     });

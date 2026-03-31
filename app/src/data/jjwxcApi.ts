@@ -334,6 +334,7 @@ async function fetchVipChapterWithPuppeteer(novelId: string, chapterId: number):
   // Try the new render endpoint first (proper font rendering)
   try {
     const renderUrl = `/api/vip-render?novelId=${novelId}&chapterId=${chapterId}&cookie=${encodeURIComponent(cookie)}`;
+    console.log('Fetching VIP render:', renderUrl);
     const res = await fetch(renderUrl, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
@@ -341,17 +342,25 @@ async function fetchVipChapterWithPuppeteer(novelId: string, chapterId: number):
     
     if (res.ok) {
       const data = await res.json();
+      console.log('VIP render response:', { success: data.success, hasHtml: !!data.contentHtml, title: data.title });
       if (data.success && data.contentHtml) {
         // Store the render data for the Reader component to use
-        (window as Window & { __vipRenderData?: unknown }).__vipRenderData = data;
+        (window as Window & { __vipRenderData?: { contentHtml: string; styles: string; title: string } }).__vipRenderData = {
+          contentHtml: data.contentHtml,
+          styles: data.styles,
+          title: data.title
+        };
+        console.log('Stored VIP render data in window');
         return { 
           title: data.title || `第${chapterId}章`, 
-          content: '[VIP_RENDER]' // Special marker to indicate render mode
+          content: '' // Empty content - will be rendered from HTML
         };
       }
+    } else {
+      console.log('VIP render endpoint returned error:', res.status);
     }
   } catch (e) {
-    console.log('Render endpoint failed, falling back to text extraction');
+    console.error('Render endpoint failed:', e);
   }
   
   // Fallback to text extraction endpoint
