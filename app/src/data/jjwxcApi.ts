@@ -15,9 +15,43 @@ export interface Novel {
   chapters: Chapter[];
 }
 
-const PROXY_BASE = '/jjwxc';
-const PROXY_BASE_MY = '/jjwxc-my';
+const PROXY_BASE = '/jjwxc/';
+const PROXY_BASE_MY = '/jjwxc-my/';
 const COOKIE_KEY = 'jjwxc_cookie';
+
+// AES decryption for VIP chapter content
+async function decryptVipContent(encryptedContent: string, key: string): Promise<string> {
+  try {
+    // Decode base64
+    const encryptedData = Uint8Array.from(atob(encryptedContent), c => c.charCodeAt(0));
+    const keyData = Uint8Array.from(atob(key), c => c.charCodeAt(0));
+    
+    // Import key
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'AES-CBC' },
+      false,
+      ['decrypt']
+    );
+    
+    // Extract IV (first 16 bytes) and ciphertext
+    const iv = encryptedData.slice(0, 16);
+    const ciphertext = encryptedData.slice(16);
+    
+    // Decrypt
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-CBC', iv },
+      cryptoKey,
+      ciphertext
+    );
+    
+    return new TextDecoder('utf-8').decode(decrypted);
+  } catch (e) {
+    console.error('Decryption failed:', e);
+    return '';
+  }
+}
 
 export function getJjwxcCookie(): string {
   return localStorage.getItem(COOKIE_KEY) || '';
@@ -92,7 +126,7 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
 
   chapterRows.forEach((row) => {
     const link = row.querySelector('a[itemprop="url"]');
-    const href = link?.getAttribute('href') || '';
+    const href = link?.getAttribute('href') || link?.getAttribute('rel') || '';
     const idMatch = href.match(/chapterid=(\d+)/);
     const id = idMatch ? parseInt(idMatch[1], 10) : 0;
     const chapterTitle = link?.textContent?.trim() || '';
@@ -119,8 +153,67 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
   };
 }
 
-function extractChapterContent(doc: Document, htmlText: string): { title: string; content: string } | null {
-  // Try multiple extraction methods
+function detectVipFont(doc: Document, htmlText: string): string | null {
+  // Method 1: Check div.noveltext classes
+  const noveltextDiv = doc.querySelector('div.noveltext');
+  if (noveltextDiv) {
+    const fontClass = Array.from(noveltextDiv.classList).find((c) => c.startsWith('jjwxcfont_'));
+    if (fontClass) return fontClass;
+  }
+
+  // Method 2: Check inline style tags
+  const styles = doc.querySelectorAll('style');
+  for (const style of styles) {
+    const cssText = style.textContent || '';
+    const match = cssText.match(/jjwxcfont_[\d\w]+/);
+    if (match) return match[0];
+  }
+
+  // Method 3: Regex on raw HTML
+  const match = htmlText.match(/jjwxcfont_[\d\w]+/);
+  if (match) return match[0];
+
+  return null;
+}
+
+async function fetchFontTable(fontName: string): Promise<Record<string, string> | null> {
+  const url = `https://fastly.jsdelivr.net/gh/404-novel-project/jinjiang_font_tables@master/${fontName}.woff2.json`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, string>;
+  } catch {
+    return null;
+  }
+}
+
+function decryptVipText(text: string, fontTable: Record<string, string>): string {
+  let output = text;
+  for (const [encrypted, normal] of Object.entries(fontTable)) {
+    output = output.split(encrypted).join(normal);
+  }
+  output = output.replace(/\u200c/g, '');
+  output = output.replace(/&zwnj;/g, '');
+  return output;
+}
+
+async function extractChapterContent(doc: Document, htmlText: string): Promise<{ title: string; content: string } | null> {
+  // Special handling for VIP chapters: check for encrypted content in hidden inputs
+  const encryptedInput = doc.querySelector('input[name="content"]') as HTMLInputElement | null;
+  const keyInput = doc.querySelector('input[name="e_key"]') as HTMLInputElement | null;
+  
+  if (encryptedInput?.value && keyInput?.value) {
+    // Decrypt VIP content
+    const decrypted = await decryptVipContent(encryptedInput.value, keyInput.value);
+    if (decrypted) {
+      // Extract title from h2 in novelbody or use default
+      const h2 = doc.querySelector('div.novelbody h2, .noveltext h2');
+      const title = h2?.textContent?.trim() || '';
+      return { title, content: decrypted };
+    }
+  }
+
+  // Try multiple extraction methods for non-VIP or fallback
 
   // Method 1: Try to find content in the novelbody div with onselectstart
   let container = doc.querySelector('div.novelbody > div[onselectstart="return false"]');
@@ -133,6 +226,11 @@ function extractChapterContent(doc: Document, htmlText: string): { title: string
   // Method 3: Try the noveltext class (sometimes used for content)
   if (!container) {
     container = doc.querySelector('.noveltext');
+  }
+
+  // Method 4: Try VIP content container
+  if (!container) {
+    container = doc.querySelector('div[id^="content_"]');
   }
 
   if (!container) {
@@ -207,20 +305,91 @@ function extractChapterContent(doc: Document, htmlText: string): { title: string
     .map((line) => line.trim().replace(/^\u3000+/, ''))
     .filter((line) => line.length > 0);
 
-  const content = paragraphs.join('\n\n');
+  let content = paragraphs.join('\n\n');
 
   if (content.length < 50) {
     return null;
   }
 
+  // VIP font decryption
+  const fontName = detectVipFont(doc, htmlText);
+  if (fontName) {
+    const fontTable = await fetchFontTable(fontName);
+    if (fontTable) {
+      content = decryptVipText(content, fontTable);
+    } else {
+      // Fallback: replace encrypted chars (char + ZWNJ) with placeholder
+      content = content.replace(/.\u200c/g, '[加密字符]');
+    }
+  }
+
   return { title, content };
+}
+
+// Fetch VIP chapter using Puppeteer backend (for encrypted content)
+async function fetchVipChapterWithPuppeteer(novelId: string, chapterId: number): Promise<{ title: string; content: string } | null> {
+  const cookie = getJjwxcCookie();
+  if (!cookie) return null;
+  
+  // Try the new render endpoint first (proper font rendering)
+  try {
+    const renderUrl = `/api/vip-render?novelId=${novelId}&chapterId=${chapterId}&cookie=${encodeURIComponent(cookie)}`;
+    const res = await fetch(renderUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.contentHtml) {
+        // Store the render data for the Reader component to use
+        (window as Window & { __vipRenderData?: unknown }).__vipRenderData = data;
+        return { 
+          title: data.title || `第${chapterId}章`, 
+          content: '[VIP_RENDER]' // Special marker to indicate render mode
+        };
+      }
+    }
+  } catch (e) {
+    console.log('Render endpoint failed, falling back to text extraction');
+  }
+  
+  // Fallback to text extraction endpoint
+  const apiUrl = `/api/vip-chapter?novelId=${novelId}&chapterId=${chapterId}&cookie=${encodeURIComponent(cookie)}`;
+  
+  try {
+    const res = await fetch(apiUrl, { 
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('Puppeteer API error:', res.status, errorText);
+      throw new Error(`Puppeteer API error: ${res.status}`);
+    }
+    
+    const data = await res.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Puppeteer failed to fetch content');
+    }
+    
+    return { title: data.title, content: data.content };
+  } catch (err) {
+    if (err instanceof TypeError && (err.message.includes('fetch') || err.message.includes('Failed'))) {
+      console.error('Backend connection failed - is the server running?', err);
+      throw new Error('VIP 解密服务未启动。请在另一个终端运行: npm run server (或双击 app/start-server.bat)');
+    }
+    throw err;
+  }
 }
 
 export async function fetchChapter(novelId: string, chapterId: number, isVip = false): Promise<Chapter> {
   // Always try www.jjwxc.net first - some chapters marked as VIP may actually be free previews,
   // and free chapter pages can contain "购买"/"充值" in ads/navigation causing false positives.
   const wwwResult = await fetchHtml(`/onebook.php?novelid=${novelId}&chapterid=${chapterId}`, false);
-  let extracted = extractChapterContent(wwwResult.doc, wwwResult.htmlText);
+  let extracted = await extractChapterContent(wwwResult.doc, wwwResult.htmlText);
 
   if (extracted) {
     return {
@@ -241,9 +410,25 @@ export async function fetchChapter(novelId: string, chapterId: number, isVip = f
   const isVipRedirect = htmlText.includes('onebook_vip.php') || htmlText.includes('jjwxc.net/backend/buynovel');
 
   if (isVipRedirect && getJjwxcCookie()) {
+    // Try Puppeteer backend first for encrypted VIP content
+    try {
+      const puppeteerResult = await fetchVipChapterWithPuppeteer(novelId, chapterId);
+      if (puppeteerResult) {
+        return {
+          id: chapterId,
+          title: puppeteerResult.title || `第${chapterId}章`,
+          content: puppeteerResult.content,
+          isVip,
+        };
+      }
+    } catch (err) {
+      console.log('Puppeteer failed, falling back to proxy:', err);
+    }
+    
+    // Fallback to direct proxy
     try {
       const vipResult = await fetchHtml(`/onebook_vip.php?novelid=${novelId}&chapterid=${chapterId}`, true);
-      const vipExtracted = extractChapterContent(vipResult.doc, vipResult.htmlText);
+      const vipExtracted = await extractChapterContent(vipResult.doc, vipResult.htmlText);
       if (vipExtracted) {
         return {
           id: chapterId,

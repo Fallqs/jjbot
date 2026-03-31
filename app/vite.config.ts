@@ -14,10 +14,14 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/jjwxc': {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+      '/jjwxc/': {
         target: 'https://www.jjwxc.net',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/jjwxc/, ''),
+        rewrite: (path) => path.replace(/^\/jjwxc\//, '/'),
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
             const cookie = req.headers['x-jjwxc-cookie'];
@@ -28,10 +32,10 @@ export default defineConfig({
           });
         },
       },
-      '/jjwxc-my': {
+      '/jjwxc-my/': {
         target: 'https://my.jjwxc.net',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/jjwxc-my/, ''),
+        rewrite: (path) => path.replace(/^\/jjwxc-my\//, '/'),
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
             const cookie = req.headers['x-jjwxc-cookie'];

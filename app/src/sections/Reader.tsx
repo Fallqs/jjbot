@@ -86,6 +86,7 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  const [renderData, setRenderData] = useState<{ contentHtml: string; styles: string } | null>(null);
   const [cookieValue, setCookieValue] = useState(getJjwxcCookie());
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
   const [cookieParseInfo, setCookieParseInfo] = useState<{ format: string; total: number; jjwxcCount: number } | null>(null);
@@ -109,10 +110,29 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
     const loadChapter = async () => {
       setLoading(true);
       setError(null);
+      setRenderData(null); // Clear previous render data
       try {
         const chapter = await fetchChapter(novelId, currentChapter, currentChapterInfo?.isVip);
-        setChapterContent(chapter.content);
-        setChapterTitle(chapter.title);
+        
+        // Check for render mode marker
+        if (chapter.content === '[VIP_RENDER]') {
+          // Get render data from window
+          const win = window as Window & { __vipRenderData?: { contentHtml: string; styles: string; title: string } };
+          if (win.__vipRenderData) {
+            setRenderData({
+              contentHtml: win.__vipRenderData.contentHtml,
+              styles: win.__vipRenderData.styles
+            });
+            setChapterTitle(win.__vipRenderData.title || chapter.title);
+            setChapterContent(''); // Content is rendered via HTML
+          } else {
+            setError('渲染数据加载失败');
+          }
+          delete win.__vipRenderData;
+        } else {
+          setChapterContent(chapter.content);
+          setChapterTitle(chapter.title);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载失败');
         setChapterContent('');
@@ -517,7 +537,22 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
 
             {!loading && !error && (
               <>
-                {formatContent(chapterContent)}
+                {renderData ? (
+                  // VIP Render Mode: inject HTML with font styles
+                  <div 
+                    className="vip-rendered-content"
+                    style={{
+                      fontSize: `${settings.fontSize}px`,
+                      lineHeight: settings.lineHeight,
+                    }}
+                    dangerouslySetInnerHTML={{ 
+                      __html: `<style>${renderData.styles}</style>${renderData.contentHtml}` 
+                    }}
+                  />
+                ) : (
+                  // Normal Mode: formatted text content
+                  formatContent(chapterContent)
+                )}
 
                 {/* Chapter End */}
                 <div className="mt-12 text-center">
