@@ -85,6 +85,34 @@ const themes = {
   },
 };
 
+// Chapter cache for prefetching
+interface CachedChapter {
+  content: string;
+  title: string;
+  vipRenderData: VipRenderData | null;
+  timestamp: number;
+}
+
+const chapterCache = new Map<number, CachedChapter>();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 10; // Maximum cached chapters
+
+// Cleanup old cache entries
+const cleanupCache = () => {
+  const now = Date.now();
+  for (const [id, entry] of chapterCache.entries()) {
+    if (now - entry.timestamp > CACHE_DURATION) {
+      chapterCache.delete(id);
+    }
+  }
+  // If still too big, remove oldest entries
+  if (chapterCache.size > MAX_CACHE_SIZE) {
+    const entries = Array.from(chapterCache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toDelete = entries.slice(0, entries.length - MAX_CACHE_SIZE);
+    toDelete.forEach(([id]) => chapterCache.delete(id));
+  }
+};
+
 export default function Reader({ novel, novelId, initialChapter = 1, onExit }: ReaderProps) {
   const [currentChapter, setCurrentChapter] = useState(initialChapter);
   const [chapterContent, setChapterContent] = useState('');
@@ -104,12 +132,98 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
   const [showSettings, setShowSettings] = useState(false);
   const [showNav, setShowNav] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+  const [cachedChapters, setCachedChapters] = useState<Set<number>>(new Set());
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Update cached chapters set for UI indicators
+  useEffect(() => {
+    const updateCachedSet = () => {
+      const cached = new Set<number>();
+      for (const [id, entry] of chapterCache.entries()) {
+        if (Date.now() - entry.timestamp < CACHE_DURATION) {
+          cached.add(id);
+        }
+      }
+      setCachedChapters(cached);
+    };
+    
+    // Update every 2 seconds
+    const interval = setInterval(updateCachedSet, 2000);
+    updateCachedSet();
+    
+    return () => clearInterval(interval);
+  }, [currentChapter]);
 
   const currentTheme = themes[settings.theme];
 
   const currentChapterInfo = novel.chapters.find((c) => c.id === currentChapter);
+
+  // Helper function to fetch and cache a chapter
+  const fetchAndCacheChapter = async (chapterId: number) => {
+    // Cleanup old entries first
+    cleanupCache();
+    
+    // Check cache first
+    const cached = chapterCache.get(chapterId);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+      console.log(`Using cached chapter ${chapterId}`);
+      return cached;
+    }
+
+    const chapterInfo = novel.chapters.find((c) => c.id === chapterId);
+    if (!chapterInfo) return null;
+
+    try {
+      const chapter = await fetchChapter(novelId, chapterId, chapterInfo.isVip);
+      
+      let content = chapter.content;
+      let title = chapter.title;
+      let renderData: VipRenderData | null = null;
+
+      // Check if we got render data from the fetch
+      const win = window as Window & { __vipRenderData?: VipRenderData };
+      if (win.__vipRenderData) {
+        renderData = win.__vipRenderData;
+        title = renderData.title || title;
+        delete win.__vipRenderData;
+      }
+
+      const cacheEntry: CachedChapter = {
+        content,
+        title,
+        vipRenderData: renderData,
+        timestamp: Date.now(),
+      };
+
+      chapterCache.set(chapterId, cacheEntry);
+      console.log(`Cached chapter ${chapterId}`);
+      return cacheEntry;
+    } catch (err) {
+      console.error(`Failed to fetch chapter ${chapterId}:`, err);
+      return null;
+    }
+  };
+
+  // Prefetch adjacent chapters
+  const prefetchAdjacentChapters = async (currentId: number) => {
+    const prevId = currentId > 1 ? currentId - 1 : null;
+    const nextId = currentId < novel.chapters.length ? currentId + 1 : null;
+
+    // Fetch in parallel
+    const promises = [];
+    if (prevId && !chapterCache.has(prevId)) {
+      promises.push(fetchAndCacheChapter(prevId));
+    }
+    if (nextId && !chapterCache.has(nextId)) {
+      promises.push(fetchAndCacheChapter(nextId));
+    }
+
+    if (promises.length > 0) {
+      console.log(`Prefetching chapters: ${prevId || ''} ${nextId || ''}`);
+      await Promise.all(promises);
+    }
+  };
 
   // Load chapter content when chapter changes
   useEffect(() => {
@@ -120,6 +234,20 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
       setChapterContent('');
       
       try {
+        // Try to get from cache first
+        const cached = chapterCache.get(currentChapter);
+        if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+          console.log(`Loading cached chapter ${currentChapter}`);
+          setVipRenderData(cached.vipRenderData);
+          setChapterTitle(cached.title);
+          setChapterContent(cached.content);
+          setLoading(false);
+          
+          // Still prefetch adjacent chapters
+          prefetchAdjacentChapters(currentChapter);
+          return;
+        }
+
         // Check for VIP render data from window (set by fetchVipChapterWithPuppeteer)
         const win = window as Window & { __vipRenderData?: VipRenderData };
         if (win.__vipRenderData) {
@@ -128,6 +256,16 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
           setChapterTitle(win.__vipRenderData.title || `第${currentChapter}章`);
           delete win.__vipRenderData;
           setLoading(false);
+          
+          // Cache current and prefetch adjacent
+          const cacheEntry: CachedChapter = {
+            content: '',
+            title: win.__vipRenderData?.title || `第${currentChapter}章`,
+            vipRenderData: win.__vipRenderData!,
+            timestamp: Date.now(),
+          };
+          chapterCache.set(currentChapter, cacheEntry);
+          prefetchAdjacentChapters(currentChapter);
           return;
         }
         
@@ -140,10 +278,31 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
           setVipRenderData(renderData);
           setChapterTitle(renderData.title || chapter.title);
           delete (window as Window & { __vipRenderData?: VipRenderData }).__vipRenderData;
+          
+          // Cache the chapter
+          const cacheEntry: CachedChapter = {
+            content: '',
+            title: renderData.title || chapter.title,
+            vipRenderData: renderData,
+            timestamp: Date.now(),
+          };
+          chapterCache.set(currentChapter, cacheEntry);
         } else {
           setChapterContent(chapter.content);
           setChapterTitle(chapter.title);
+          
+          // Cache the chapter
+          const cacheEntry: CachedChapter = {
+            content: chapter.content,
+            title: chapter.title,
+            vipRenderData: null,
+            timestamp: Date.now(),
+          };
+          chapterCache.set(currentChapter, cacheEntry);
         }
+        
+        // Prefetch adjacent chapters in background
+        prefetchAdjacentChapters(currentChapter);
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载失败');
         setChapterContent('');
@@ -513,6 +672,12 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
               <span>作者：{novel.author}</span>
               <span>·</span>
               <span>第 {currentChapter}/{novel.chapters.length} 章</span>
+              {cachedChapters.size > 0 && (
+                <>
+                  <span>·</span>
+                  <span className="text-green-600 text-xs">{cachedChapters.size} 章已缓存</span>
+                </>
+              )}
             </div>
           </div>
 
@@ -590,10 +755,13 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
             variant="outline"
             onClick={handlePrevChapter}
             disabled={currentChapter <= 1}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 relative"
           >
             <ChevronLeft className="w-4 h-4" />
             <span className="hidden sm:inline">上一章</span>
+            {cachedChapters.has(currentChapter - 1) && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-background" title="已缓存" />
+            )}
           </Button>
 
           {/* Progress Bar */}
@@ -614,10 +782,13 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
             variant="outline"
             onClick={handleNextChapter}
             disabled={currentChapter >= novel.chapters.length}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 relative"
           >
             <span className="hidden sm:inline">下一章</span>
             <ChevronRight className="w-4 h-4" />
+            {cachedChapters.has(currentChapter + 1) && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-background" title="已缓存" />
+            )}
           </Button>
         </div>
       </nav>
