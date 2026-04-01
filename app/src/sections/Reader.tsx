@@ -251,17 +251,18 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
         // Check for VIP render data from window (set by fetchVipChapterWithPuppeteer)
         const win = window as Window & { __vipRenderData?: VipRenderData };
         if (win.__vipRenderData) {
+          const renderData = win.__vipRenderData;
           console.log('Found VIP render data in window');
-          setVipRenderData(win.__vipRenderData);
-          setChapterTitle(win.__vipRenderData.title || `第${currentChapter}章`);
+          setVipRenderData(renderData);
+          setChapterTitle(renderData.title || `第${currentChapter}章`);
           delete win.__vipRenderData;
           setLoading(false);
           
           // Cache current and prefetch adjacent
           const cacheEntry: CachedChapter = {
             content: '',
-            title: win.__vipRenderData?.title || `第${currentChapter}章`,
-            vipRenderData: win.__vipRenderData!,
+            title: renderData.title || `第${currentChapter}章`,
+            vipRenderData: renderData,
             timestamp: Date.now(),
           };
           chapterCache.set(currentChapter, cacheEntry);
@@ -351,19 +352,30 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [currentChapter]);
 
+  const reportReading = (chapterId: number) => {
+    fetch('/api/reading-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ novelId, chapterId }),
+    }).catch(() => {});
+  };
+
   const handlePrevChapter = () => {
     if (currentChapter > 1) {
+      reportReading(currentChapter);
       setCurrentChapter(currentChapter - 1);
     }
   };
 
   const handleNextChapter = () => {
     if (currentChapter < novel.chapters.length) {
+      reportReading(currentChapter);
       setCurrentChapter(currentChapter + 1);
     }
   };
 
   const handleChapterSelect = (chapterId: number) => {
+    reportReading(currentChapter);
     setCurrentChapter(chapterId);
   };
 
@@ -434,7 +446,7 @@ export default function Reader({ novel, novelId, initialChapter = 1, onExit }: R
             <Button
               variant="ghost"
               size="icon"
-              onClick={onExit}
+              onClick={() => { reportReading(currentChapter); onExit(); }}
               className="hover:bg-black/5"
             >
               <ChevronLeft className="w-5 h-5" />

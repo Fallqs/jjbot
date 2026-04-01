@@ -49,3 +49,11 @@ coverage/
 *.pid
 *.seed
 *.pid.lock
+
+# Database
+app/data/jjbot.db
+app/data/*.db
+
+
+*.db-shm
+*.db-wal

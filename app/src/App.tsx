@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { BookOpen, Search, Library, User, Star, TrendingUp, Clock, Heart, Share, Loader2, Cookie } from 'lucide-react';
+import { BookOpen, Search, Library, User, Star, TrendingUp, Clock, Heart, Share, Loader2, Cookie, Sparkles } from 'lucide-react';
+import LibrarySection from '@/sections/Library';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -14,25 +15,48 @@ import {
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
 import Reader from '@/sections/Reader';
+
 import { fetchNovelInfo, getJjwxcCookie, setJjwxcCookie, clearJjwxcCookie, type Novel } from '@/data/jjwxcApi';
 import { autoConvertCookieInput } from '@/data/cookieParser';
 import './App.css';
 
 function App() {
-  const [isReading, setIsReading] = useState(false);
-  const [currentChapter, setCurrentChapter] = useState(1);
-  const [novelId, setNovelId] = useState('5484954');
-  const [searchInput, setSearchInput] = useState('5484954');
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlReadId = urlParams.get('read');
+  const urlDetailId = urlParams.get('novel');
+  const urlChapter = parseInt(urlParams.get('chapter') || '1', 10);
+
+  const initialView = urlReadId ? 'reading' : 'library';
+  const [currentView, setCurrentView] = useState<'home' | 'library' | 'reading'>(initialView);
+  const [currentChapter, setCurrentChapter] = useState(isNaN(urlChapter) ? 1 : urlChapter);
+  const [novelId, setNovelId] = useState(urlReadId || urlDetailId || '5484954');
+  const [searchInput, setSearchInput] = useState(urlReadId || urlDetailId || '5484954');
   const [novel, setNovel] = useState<Novel | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cookieValue, setCookieValue] = useState(getJjwxcCookie());
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
   const [cookieParseInfo, setCookieParseInfo] = useState<{ format: string; total: number; jjwxcCount: number } | null>(null);
+  const [kimiDialogOpen, setKimiDialogOpen] = useState(false);
+  const [kimiApiKey, setKimiApiKey] = useState('');
+  const [kimiConfigured, setKimiConfigured] = useState(false);
 
   useEffect(() => {
     loadNovel(novelId);
   }, [novelId]);
+
+  useEffect(() => {
+    if (urlDetailId) {
+      setCurrentView('home');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/config/kimi')
+      .then(r => r.json())
+      .then(data => setKimiConfigured(data.configured))
+      .catch(() => {});
+  }, []);
 
   const loadNovel = async (id: string) => {
     setLoading(true);
@@ -53,6 +77,7 @@ function App() {
     const id = searchInput.trim();
     if (id && /^\d+$/.test(id)) {
       setNovelId(id);
+      setCurrentView('home');
     } else {
       setError('请输入有效的小说ID（纯数字）');
     }
@@ -84,19 +109,40 @@ function App() {
     setCookieDialogOpen(false);
   };
 
+  const handleSaveKimiKey = async () => {
+    await fetch('/api/config/kimi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: kimiApiKey.trim() }),
+    });
+    setKimiConfigured(true);
+    setKimiDialogOpen(false);
+  };
+
+  const handleClearKimiKey = async () => {
+    await fetch('/api/config/kimi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: '' }),
+    });
+    setKimiApiKey('');
+    setKimiConfigured(false);
+    setKimiDialogOpen(false);
+  };
+
   const startReading = (chapterId: number = 1) => {
     setCurrentChapter(chapterId);
-    setIsReading(true);
+    setCurrentView('reading');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  if (isReading && novel) {
+  if (currentView === 'reading' && novel) {
     return (
       <Reader
         novel={novel}
         novelId={novelId}
         initialChapter={currentChapter}
-        onExit={() => setIsReading(false)}
+        onExit={() => setCurrentView('home')}
       />
     );
   }
@@ -119,10 +165,10 @@ function App() {
           </div>
 
           <div className="hidden md:flex items-center gap-6">
-            <a href="#" className="text-sm font-medium hover:text-primary transition-colors">首页</a>
-            <a href="#" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">书库</a>
-            <a href="#" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">排行榜</a>
-            <a href="#" className="text-sm font-medium text-muted-foreground hover:text-primary transition-colors">分类</a>
+            <button onClick={() => setCurrentView('home')} className={`text-sm font-medium hover:text-primary transition-colors ${currentView === 'home' ? 'text-primary' : ''}`}>首页</button>
+            <button onClick={() => setCurrentView('library')} className={`text-sm font-medium hover:text-primary transition-colors ${currentView === 'library' ? 'text-primary' : ''}`}>书库</button>
+            <span className="text-sm font-medium text-muted-foreground cursor-not-allowed">排行榜</span>
+            <span className="text-sm font-medium text-muted-foreground cursor-not-allowed">分类</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -135,6 +181,50 @@ function App() {
                 className="pl-9 w-48 lg:w-64"
               />
             </form>
+
+            <Dialog open={kimiDialogOpen} onOpenChange={setKimiDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={`hidden sm:inline-flex ${kimiConfigured ? 'text-primary' : 'text-muted-foreground'}`}
+                  title="Kimi API 设置"
+                >
+                  <Sparkles className="w-5 h-5" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Kimi API Key 设置</DialogTitle>
+                  <DialogDescription>
+                    配置 Moonshot (Kimi) API Key 以启用智能搜索和推荐功能。
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 pt-2">
+                  <div className="text-sm text-muted-foreground space-y-1">
+                    <p>获取方式：</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>访问 <a href="https://platform.moonshot.cn" target="_blank" rel="noreferrer" className="text-primary underline">Moonshot 开放平台</a></li>
+                      <li>注册并创建 API Key</li>
+                      <li>将 Key 粘贴到下方并保存</li>
+                    </ol>
+                  </div>
+                  <Input
+                    placeholder="sk-..."
+                    value={kimiApiKey}
+                    onChange={(e) => setKimiApiKey(e.target.value)}
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <Button variant="outline" onClick={handleClearKimiKey}>
+                      清除
+                    </Button>
+                    <Button onClick={handleSaveKimiKey}>
+                      保存
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             <Dialog open={cookieDialogOpen} onOpenChange={setCookieDialogOpen}>
               <DialogTrigger asChild>
@@ -198,14 +288,18 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {loading && (
+        {currentView === 'library' && (
+          <LibrarySection />
+        )}
+
+        {currentView === 'home' && loading && (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="w-10 h-10 animate-spin text-primary mb-4" />
             <p className="text-muted-foreground">正在加载小说信息...</p>
           </div>
         )}
 
-        {error && !loading && (
+        {currentView === 'home' && error && !loading && (
           <div className="bg-destructive/10 border border-destructive/20 rounded-2xl p-8 text-center">
             <p className="text-destructive font-medium mb-2">加载失败</p>
             <p className="text-muted-foreground text-sm mb-4">{error}</p>
@@ -213,7 +307,15 @@ function App() {
           </div>
         )}
 
-        {!loading && !error && novel && (
+        {currentView === 'home' && !loading && !error && !novel && (
+          <div className="text-center py-20 text-muted-foreground">
+            <BookOpen className="w-12 h-12 mx-auto mb-4 opacity-30" />
+            <p className="mb-2">在上方搜索框输入小说 ID 即可开始</p>
+            <Button variant="outline" onClick={() => setCurrentView('library')}>去书库看看</Button>
+          </div>
+        )}
+
+        {currentView === 'home' && !loading && !error && novel && (
           <>
             {/* Novel Header Card */}
             <div className="bg-card rounded-2xl shadow-sm border p-6 mb-8">

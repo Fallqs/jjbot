@@ -65,7 +65,6 @@ function parseNetscapeFormat(text: string): ParsedCookie[] {
     const parts = line.split('\t');
     if (parts.length !== 7) continue;
     const domain = parts[0].trim();
-    const path = parts[2].trim();
     const name = parts[5].trim();
     const value = parts[6].trim();
     if (!name) continue;
@@ -84,17 +83,17 @@ function parseJsonFormat(text: string): ParsedCookie[] {
   try {
     const arr = JSON.parse(text) as unknown[];
     if (!Array.isArray(arr)) return [];
-    return arr
+    return (arr
       .map((item) => {
         if (typeof item !== 'object' || item === null) return null;
         const obj = item as Record<string, unknown>;
         const name = String(obj.name ?? obj.Name ?? '');
         const value = String(obj.value ?? obj.Value ?? '');
-        const domain = String(obj.domain ?? obj.Domain ?? '');
+        const domainStr = String(obj.domain ?? obj.Domain ?? '');
         if (!name) return null;
-        return { name, value, domain };
+        return { name, value, domain: domainStr || undefined };
       })
-      .filter((c): c is ParsedCookie => c !== null);
+      .filter((c) => c !== null) as ParsedCookie[]);
   } catch {
     return [];
   }

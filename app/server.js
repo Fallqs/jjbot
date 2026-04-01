@@ -3,6 +3,9 @@ import cors from 'cors';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import opentype from 'opentype.js';
+import { fetchNovelMeta, crawlNovels, crawlBookbase } from './server/crawler.js';
+import * as dao from './server/novelDao.js';
+import * as kimi from './server/kimiService.js';
 
 // Enable stealth mode to avoid detection
 puppeteer.use(StealthPlugin());
@@ -502,6 +505,344 @@ app.get('/api/vip-chapter', async (req, res) => {
   }
 });
 
+// =====================
+// Novel Library & Crawler APIs
+// =====================
+
+// Batch crawl
+app.post('/api/crawl', async (req, res) => {
+  try {
+    const { ids, range, delayMs = 200 } = req.body;
+    let targetIds = [];
+
+    if (Array.isArray(ids)) {
+      targetIds = ids.map(String).filter(Boolean);
+    } else if (range && typeof range.start === 'number' && typeof range.end === 'number') {
+      for (let i = range.start; i <= range.end; i++) {
+        targetIds.push(String(i));
+      }
+    }
+
+    if (targetIds.length === 0) {
+      return res.status(400).json({ error: '请提供 ids 或 range' });
+    }
+
+    if (targetIds.length > 500) {
+      return res.status(400).json({ error: '单次爬取数量不能超过 500' });
+    }
+
+    const progress = [];
+    const { results, errors } = await crawlNovels(targetIds, {
+      delayMs: Math.max(500, Number(delayMs) || 1000),
+      onProgress: (p) => {
+        progress.push({ current: p.current, total: p.total, id: p.id, success: p.success });
+      },
+    });
+
+    // Save to DB
+    const saved = [];
+    for (const meta of results) {
+      if (meta.title) {
+        dao.upsertNovel(meta);
+        saved.push(meta.id);
+      }
+    }
+
+    res.json({
+      total: targetIds.length,
+      saved: saved.length,
+      failed: errors.length,
+      savedIds: saved,
+      errors: errors.slice(0, 20),
+    });
+  } catch (err) {
+    console.error('Crawl error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Crawl from bookbase list pages
+app.post('/api/crawl/bookbase', async (req, res) => {
+  try {
+    const { startPage, endPage, filters, delayMs = 200, autoCrawlDetails = true } = req.body;
+    const sp = Math.max(1, parseInt(startPage, 10) || 1);
+    const ep = Math.max(sp, parseInt(endPage, 10) || sp);
+    if (ep - sp + 1 > 100) {
+      return res.status(400).json({ error: '单次翻页数量不能超过 100 页' });
+    }
+
+    // 1. collect metadata from list pages (fast path: list page already has author/tags/status/word_count)
+    const { collected, errors: listErrors } = await crawlBookbase({
+      startPage: sp,
+      endPage: ep,
+      filters,
+      delayMs: Math.max(0, Number(delayMs) || 200),
+    });
+
+    if (!autoCrawlDetails) {
+      return res.json({
+        mode: 'list-only',
+        totalPages: ep - sp + 1,
+        collected: collected.length,
+        ids: collected.map(n => n.id),
+        listErrors: listErrors.slice(0, 20),
+      });
+    }
+
+    // 2. save directly (bookbase list page provides sufficient metadata for search/recommend)
+    const saved = [];
+    for (const meta of collected) {
+      if (meta.title) {
+        dao.upsertNovel(meta);
+        saved.push(meta.id);
+      }
+    }
+
+    res.json({
+      mode: 'full',
+      totalPages: ep - sp + 1,
+      collected: collected.length,
+      saved: saved.length,
+      failed: listErrors.length,
+      savedIds: saved,
+      listErrors: listErrors.slice(0, 20),
+    });
+  } catch (err) {
+    console.error('Bookbase crawl error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Single novel sync
+app.post('/api/novels/:id/sync', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const meta = await fetchNovelMeta(id);
+    if (!meta.title) {
+      return res.status(404).json({ error: '小说不存在或页面解析失败' });
+    }
+    dao.upsertNovel(meta);
+    res.json({ success: true, novel: dao.getNovelById(id) });
+  } catch (err) {
+    console.error('Sync error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sync all novels
+app.post('/api/sync/all', async (req, res) => {
+  try {
+    const ids = dao.getAllNovelIds();
+    const delayMs = Math.max(0, Number(req.body.delayMs) || 200);
+    let updated = 0;
+    let failed = 0;
+
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const meta = await fetchNovelMeta(ids[i]);
+        if (meta.title) {
+          dao.upsertNovel(meta);
+          updated++;
+        }
+      } catch (e) {
+        failed++;
+      }
+      if (delayMs > 0 && i < ids.length - 1) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+
+    res.json({ total: ids.length, updated, failed });
+  } catch (err) {
+    console.error('Sync all error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sync missing details (summary + stats)
+app.post('/api/sync/details', async (req, res) => {
+  try {
+    const limit = Math.min(500, Math.max(1, parseInt(req.body.limit, 10) || 100));
+    const delayMs = Math.max(0, Number(req.body.delayMs) || 200);
+    const ids = dao.getNovelIdsMissingDetails(limit);
+    let updated = 0;
+    let failed = 0;
+
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const meta = await fetchNovelMeta(ids[i]);
+        if (meta.title) {
+          dao.upsertNovel(meta);
+          updated++;
+        }
+      } catch (e) {
+        failed++;
+      }
+      if (delayMs > 0 && i < ids.length - 1) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+
+    res.json({ total: ids.length, updated, failed });
+  } catch (err) {
+    console.error('Sync details error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List novels
+app.get('/api/novels', (req, res) => {
+  try {
+    const { keyword, tags, author, status, limit, offset } = req.query;
+    const tagArray = tags ? String(tags).split(',').map(s => s.trim()).filter(Boolean) : undefined;
+    const result = dao.listNovels({
+      keyword: keyword || undefined,
+      tags: tagArray,
+      author: author || undefined,
+      status: status || undefined,
+      limit: limit ? parseInt(limit, 10) : 50,
+      offset: offset ? parseInt(offset, 10) : 0,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get novel detail
+app.get('/api/novels/:id', (req, res) => {
+  try {
+    const novel = dao.getNovelById(req.params.id);
+    if (!novel) return res.status(404).json({ error: 'Not found' });
+    res.json(novel);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete novel (soft)
+app.delete('/api/novels/:id', (req, res) => {
+  try {
+    dao.deleteNovel(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stats
+app.get('/api/stats', (req, res) => {
+  try {
+    res.json(dao.getNovelStats());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Popular tags
+app.get('/api/tags/popular', (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 20;
+    res.json(dao.getPopularTags(limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reading history
+app.post('/api/reading-history', (req, res) => {
+  try {
+    const { novelId, chapterId } = req.body;
+    if (!novelId) return res.status(400).json({ error: 'novelId required' });
+    dao.recordReading(String(novelId), chapterId ? parseInt(chapterId, 10) : 1);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/reading-history', (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 10;
+    res.json(dao.getReadingHistory(limit));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kimi config
+app.get('/api/config/kimi', (req, res) => {
+  try {
+    const key = dao.getConfig('kimi_api_key');
+    res.json({ configured: !!key, key: key ? `${key.slice(0, 6)}...` : null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/config/kimi', (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    if (!apiKey) return res.status(400).json({ error: 'apiKey required' });
+    dao.setConfig('kimi_api_key', String(apiKey).trim());
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kimi search
+app.post('/api/search/kimi', async (req, res) => {
+  try {
+    const { query, candidateLimit = 20 } = req.body;
+    if (!query) return res.status(400).json({ error: 'query required' });
+
+    // 1. coarse filter by keyword from local DB
+    const { novels } = dao.listNovels({ keyword: query, limit: candidateLimit });
+    // If too few keyword matches, pad with recent novels
+    let candidates = novels;
+    if (candidates.length < 10) {
+      const { novels: recent } = dao.listNovels({ limit: candidateLimit });
+      const seen = new Set(candidates.map(n => n.id));
+      for (const n of recent) {
+        if (!seen.has(n.id)) candidates.push(n);
+        if (candidates.length >= candidateLimit) break;
+      }
+    }
+
+    const result = await kimi.searchNovels(query, candidates);
+    res.json({ ...result, candidatesCount: candidates.length });
+  } catch (err) {
+    console.error('Kimi search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Kimi recommend
+app.post('/api/recommend/kimi', async (req, res) => {
+  try {
+    const { candidateLimit = 20 } = req.body;
+    const history = dao.getReadingHistory(5);
+    const excludeIds = new Set(history.map(h => h.id));
+
+    const { novels } = dao.listNovels({ limit: candidateLimit * 2 });
+    const candidates = novels.filter(n => !excludeIds.has(n.id)).slice(0, candidateLimit);
+
+    if (history.length === 0) {
+      return res.status(400).json({ error: '暂无阅读历史，无法生成推荐' });
+    }
+    if (candidates.length === 0) {
+      return res.status(400).json({ error: '书库为空，无法生成推荐' });
+    }
+
+    const result = await kimi.recommendNovels(history, candidates);
+    res.json({ ...result, candidatesCount: candidates.length });
+  } catch (err) {
+    console.error('Kimi recommend error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
@@ -516,5 +857,5 @@ process.on('SIGINT', async () => {
 });
 
 app.listen(PORT, () => {
-  console.log(`VIP chapter server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
