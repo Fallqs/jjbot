@@ -322,11 +322,16 @@ function App() {
               <div className="flex flex-col md:flex-row gap-6">
                 {/* Cover */}
                 <div className="flex-shrink-0">
-                  <div className="w-40 h-56 md:w-48 md:h-72 bg-gradient-to-br from-primary/20 via-primary/10 to-muted rounded-xl shadow-inner flex items-center justify-center mx-auto md:mx-0">
-                    <div className="text-center p-4">
-                      <BookOpen className="w-12 h-12 text-primary/40 mx-auto mb-2" />
-                      <p className="text-xs text-muted-foreground">封面加载中</p>
-                    </div>
+                  <div
+                    className="w-40 h-56 md:w-48 md:h-72 rounded-xl shadow-inner flex items-center justify-center mx-auto md:mx-0 bg-cover bg-center"
+                    style={{ backgroundImage: novel.coverUrl ? `url(${novel.coverUrl})` : undefined }}
+                  >
+                    {!novel.coverUrl && (
+                      <div className="text-center p-4">
+                        <BookOpen className="w-12 h-12 text-primary/40 mx-auto mb-2" />
+                        <p className="text-xs text-muted-foreground">封面加载中</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 

@@ -497,7 +497,7 @@ export default function Library() {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {aiResults.items.map(({ novel, reason }) => (
-                <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow border-primary/30 cursor-pointer" onClick={() => window.open(`?novel=${novel.id}`, '_blank')}>
+                <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow border-primary/30 cursor-pointer" onClick={() => { window.open(`?novel=${novel.id}`, '_blank'); fetch(`/api/novels/${novel.id}/sync`, { method: 'POST' }); }}>
                   <CardContent className="p-0">
                     <div className="flex gap-4 p-4">
                       <div
@@ -563,7 +563,7 @@ export default function Library() {
             <p className="text-sm text-muted-foreground">共 {total} 条结果</p>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {novels.map(novel => (
-                <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow cursor-pointer" onClick={() => window.open(`?novel=${novel.id}`, '_blank')}>
+                <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow cursor-pointer" onClick={() => { window.open(`?novel=${novel.id}`, '_blank'); fetch(`/api/novels/${novel.id}/sync`, { method: 'POST' }); }}>
                   <CardContent className="p-0">
                     <div className="flex gap-4 p-4">
                       <div
