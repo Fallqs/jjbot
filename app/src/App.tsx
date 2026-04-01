@@ -62,8 +62,17 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchNovelInfo(id);
-      setNovel(data);
+      const [webRes, dbRes] = await Promise.allSettled([
+        fetchNovelInfo(id),
+        fetch(`/api/novels/${id}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      ]);
+
+      if (webRes.status === 'fulfilled') {
+        const merged = { ...webRes.value, ...(dbRes.status === 'fulfilled' && dbRes.value ? dbRes.value : {}) };
+        setNovel(merged);
+      } else {
+        throw webRes.reason;
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       setNovel(null);
@@ -411,28 +420,28 @@ function App() {
                     <div className="flex items-center gap-2">
                       <Star className="w-5 h-5 text-yellow-500" />
                       <div>
-                        <p className="font-bold">9.8</p>
+                        <p className="font-bold">{novel.score ?? '-'}</p>
                         <p className="text-xs text-muted-foreground">评分</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <TrendingUp className="w-5 h-5 text-blue-500" />
                       <div>
-                        <p className="font-bold">12.5万</p>
+                        <p className="font-bold">{novel.click_count != null ? (novel.click_count >= 10000 ? (novel.click_count / 10000).toFixed(1) + '万' : novel.click_count.toLocaleString()) : '-'}</p>
                         <p className="text-xs text-muted-foreground">点击</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Heart className="w-5 h-5 text-red-500" />
                       <div>
-                        <p className="font-bold">8.3万</p>
+                        <p className="font-bold">{novel.collection_count != null ? (novel.collection_count >= 10000 ? (novel.collection_count / 10000).toFixed(1) + '万' : novel.collection_count.toLocaleString()) : '-'}</p>
                         <p className="text-xs text-muted-foreground">收藏</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Clock className="w-5 h-5 text-green-500" />
                       <div>
-                        <p className="font-bold">2025-09-29</p>
+                        <p className="font-bold">{novel.update_time?.split(' ')[0] ?? '-'}</p>
                         <p className="text-xs text-muted-foreground">更新</p>
                       </div>
                     </div>
@@ -505,7 +514,7 @@ function App() {
                       </div>
                       <div>
                         <p className="text-sm text-muted-foreground">状态</p>
-                        <p className="font-medium">连载中</p>
+                        <p className="font-medium">{novel.status || '未知'}</p>
                       </div>
                       <div>
                         <p className="text-sm text-muted-foreground">总章节</p>
@@ -513,7 +522,7 @@ function App() {
                       </div>
                       <div>
                         <p className="text-sm text-muted-foreground">更新时间</p>
-                        <p className="font-medium">2025-09-29</p>
+                        <p className="font-medium">{novel.update_time?.split(' ')[0] || '-'}</p>
                       </div>
                     </div>
                   </div>

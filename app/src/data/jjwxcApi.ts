@@ -14,6 +14,13 @@ export interface Novel {
   tags: string[];
   chapters: Chapter[];
   coverUrl?: string;
+  status?: string;
+  word_count?: number;
+  chapter_count?: number;
+  click_count?: number;
+  collection_count?: number;
+  score?: number;
+  update_time?: string;
 }
 
 const PROXY_BASE = '/jjwxc/';
@@ -143,6 +150,50 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
     if (coverMatch) coverUrl = coverMatch[1];
   }
 
+  // Stats from page text
+  const pageText = doc.body?.textContent || '';
+
+  let status = '';
+  let wordCount: number | undefined;
+  let updateTime = '';
+  let score: number | undefined;
+  let clickCount: number | undefined;
+  let collectionCount: number | undefined;
+
+  const statusMatch = pageText.match(/文章进度[：:]\s*(连载中|已完成|已完结|暂停)/);
+  if (statusMatch) {
+    status = statusMatch[1].replace('已完成', '完结').replace('已完结', '完结');
+  } else if (pageText.includes('连载中')) {
+    status = '连载中';
+  } else if (pageText.includes('已完结') || pageText.includes('已完成')) {
+    status = '完结';
+  }
+
+  const wcMatch = pageText.match(/全文字数[：:]\s*([\d,]+)/);
+  if (wcMatch) {
+    wordCount = parseInt(wcMatch[1].replace(/,/g, ''), 10);
+  }
+
+  const utMatch = pageText.match(/最新更新[：:]\s*(\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}:\d{2})/);
+  if (utMatch) {
+    updateTime = utMatch[1];
+  }
+
+  const scoreMatch = pageText.match(/评分[：:]\s*([\d.]+)/);
+  if (scoreMatch) {
+    score = parseFloat(scoreMatch[1]);
+  }
+
+  const collMatch = pageText.match(/文章收藏[：:]\s*([\d,]+)/) || pageText.match(/收藏[：:]\s*([\d,]+)/);
+  if (collMatch) {
+    collectionCount = parseInt(collMatch[1].replace(/,/g, ''), 10);
+  }
+
+  const clickMatchText = pageText.match(/文章点击[：:]\s*([\d,]+)/) || pageText.match(/点击[：:]\s*([\d,]+)/);
+  if (clickMatchText) {
+    clickCount = parseInt(clickMatchText[1].replace(/,/g, ''), 10);
+  }
+
   // Chapters
   const chapters: Chapter[] = [];
   const chapterRows = doc.querySelectorAll('tr[itemprop="chapter"]');
@@ -174,6 +225,13 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
     tags,
     chapters,
     coverUrl,
+    status,
+    word_count: wordCount,
+    chapter_count: chapters.length,
+    click_count: clickCount,
+    collection_count: collectionCount,
+    score,
+    update_time: updateTime,
   };
 }
 
