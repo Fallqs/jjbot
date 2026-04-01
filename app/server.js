@@ -622,6 +622,16 @@ app.post('/api/novels/:id/sync', async (req, res) => {
       return res.status(404).json({ error: '小说不存在或页面解析失败' });
     }
     dao.upsertNovel(meta);
+    // Supplement stats (collection & score) from mobile rendered page
+    try {
+      const mobileStats = await fetchNovelStatsMobile(id);
+      if (Object.keys(mobileStats).length > 0) {
+        const existing = dao.getNovelById(id);
+        dao.upsertNovel({ ...existing, ...mobileStats });
+      }
+    } catch (e) {
+      console.error('Mobile stats fetch error:', e.message);
+    }
     res.json({ success: true, novel: dao.getNovelById(id) });
   } catch (err) {
     console.error('Sync error:', err);
@@ -847,6 +857,38 @@ app.post('/api/recommend/kimi', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
+
+// Fetch collection & score from mobile page (requires JS rendering)
+async function fetchNovelStatsMobile(novelId) {
+  const b = await getBrowser();
+  const page = await b.newPage();
+  try {
+    await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1');
+    await page.setViewport({ width: 375, height: 812 });
+    await page.goto(`https://m.jjwxc.net/book2/${novelId}`, { waitUntil: 'networkidle2', timeout: 30000 });
+    await new Promise(r => setTimeout(r, 4000));
+    const text = await page.evaluate(() => document.body.innerText);
+    const stats = {};
+    const collMatch = text.match(/收藏\((\d+)\)/);
+    if (collMatch) stats.collection_count = parseInt(collMatch[1], 10);
+    const scoreMatch = text.match(/评分[：:]\s*([\d.]+)/);
+    if (scoreMatch) stats.score = parseFloat(scoreMatch[1]);
+    const statusMatch = text.match(/状态[：:]\s*([^/]+)/);
+    if (statusMatch) {
+      const st = statusMatch[1].replace('已完结', '完结').replace('已完成', '完结').trim();
+      if (st === '连载中' || st === '完结' || st === '暂停') stats.status = st;
+    }
+    const wordMatch = text.match(/状态[：:]\s*[^/]+\/([^/]+)\/([\d,]+)字/);
+    if (wordMatch) {
+      stats.word_count = parseInt(wordMatch[2].replace(/,/g, ''), 10);
+      const st = wordMatch[1].replace('已完结', '完结').replace('已完成', '完结').trim();
+      if (st === '连载中' || st === '完结' || st === '暂停') stats.status = st;
+    }
+    return stats;
+  } finally {
+    if (page) await page.close();
+  }
+}
 
 // Cleanup on exit
 process.on('SIGINT', async () => {

@@ -114,12 +114,12 @@ function parseNovelPage(novelId, html) {
   let clickCount = null;
 
   // Status
-  const statusMatch = pageText.match(/文章进度[：:]\s*(连载中|已完成|已完结|暂停)/);
+  const statusMatch = pageText.match(/文章进度[：:]\s*(连载中|已完成|已完结|完结|暂停)/);
   if (statusMatch) {
     status = statusMatch[1].replace('已完成', '完结').replace('已完结', '完结');
   } else if (pageText.includes('连载中')) {
     status = '连载中';
-  } else if (pageText.includes('已完结') || pageText.includes('已完成')) {
+  } else if (pageText.includes('已完结') || pageText.includes('已完成') || pageText.includes('完结')) {
     status = '完结';
   }
 
@@ -129,10 +129,19 @@ function parseNovelPage(novelId, html) {
     wordCount = parseInt(wcMatch[1].replace(/,/g, ''), 10);
   }
 
-  // Update time
-  const utMatch = pageText.match(/最新更新[：:]\s*(\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}:\d{2})/);
-  if (utMatch) {
-    updateTime = utMatch[1];
+  // Update time: most accurate source is the last chapter row's time cell
+  const lastChapter = chapterRows.last();
+  if (lastChapter.length) {
+    const timeSpan = lastChapter.find('td[align="center"] span').last();
+    if (timeSpan.length) {
+      updateTime = timeSpan.text().trim();
+    }
+  }
+  if (!updateTime) {
+    const utMatch = pageText.match(/最新更新\s*\d+\s*[\s\S]*?(\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}:\d{2})/);
+    if (utMatch) {
+      updateTime = utMatch[1];
+    }
   }
 
   // Stats
