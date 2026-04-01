@@ -733,7 +733,7 @@ app.delete('/api/novels/:id', (req, res) => {
 // Stats
 app.get('/api/stats', (req, res) => {
   try {
-    res.json(dao.getNovelStats());
+    res.json({ ...dao.getNovelStats(), missingDetails: dao.countMissingDetails() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

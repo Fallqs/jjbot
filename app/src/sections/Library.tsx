@@ -96,11 +96,9 @@ export default function Library() {
 
   const fetchMissingDetails = useCallback(async () => {
     try {
-      // We'll infer from current novels list for simplicity, or just count empty summaries in loaded novels
-      const res = await fetch('/api/novels?limit=1000');
+      const res = await fetch('/api/stats');
       const data = await res.json();
-      const count = (data.novels || []).filter((n: Novel) => !n.summary).length;
-      setMissingDetailsCount(count);
+      setMissingDetailsCount(data.missingDetails || 0);
     } catch (e) {
       console.error(e);
     }
@@ -500,11 +498,16 @@ export default function Library() {
                 <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow border-primary/30 cursor-pointer" onClick={() => { window.open(`?novel=${novel.id}`, '_blank'); fetch(`/api/novels/${novel.id}/sync`, { method: 'POST' }); }}>
                   <CardContent className="p-0">
                     <div className="flex gap-4 p-4">
-                      <div
-                        className="w-24 h-32 bg-muted rounded flex-shrink-0 bg-cover bg-center"
-                        style={{ backgroundImage: novel.cover_url ? `url(${novel.cover_url})` : undefined }}
-                      >
-                        {!novel.cover_url && (
+                      <div className="w-24 h-32 bg-muted rounded flex-shrink-0 overflow-hidden relative">
+                        {(novel.cover_url || (novel as any).coverUrl) ? (
+                          <img
+                            src={(novel.cover_url || (novel as any).coverUrl) as string}
+                            alt="封面"
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        ) : (
                           <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
                             无封面
                           </div>
@@ -566,11 +569,16 @@ export default function Library() {
                 <Card key={novel.id} className="overflow-hidden hover:shadow-md transition-shadow cursor-pointer" onClick={() => { window.open(`?novel=${novel.id}`, '_blank'); fetch(`/api/novels/${novel.id}/sync`, { method: 'POST' }); }}>
                   <CardContent className="p-0">
                     <div className="flex gap-4 p-4">
-                      <div
-                        className="w-24 h-32 bg-muted rounded flex-shrink-0 bg-cover bg-center"
-                        style={{ backgroundImage: novel.cover_url ? `url(${novel.cover_url})` : undefined }}
-                      >
-                        {!novel.cover_url && (
+                      <div className="w-24 h-32 bg-muted rounded flex-shrink-0 overflow-hidden relative">
+                        {(novel.cover_url || (novel as any).coverUrl) ? (
+                          <img
+                            src={(novel.cover_url || (novel as any).coverUrl) as string}
+                            alt="封面"
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        ) : (
                           <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
                             无封面
                           </div>

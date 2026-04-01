@@ -180,6 +180,13 @@ export function getNovelIdsMissingDetails(limit = 100) {
   `).all(limit).map(r => r.id);
 }
 
+export function countMissingDetails() {
+  return db.prepare(`
+    SELECT COUNT(*) as count FROM novels
+    WHERE is_deleted = 0 AND (summary = '' OR summary IS NULL)
+  `).get().count;
+}
+
 export function getPopularTags(limit = 20) {
   return db.prepare(`
     SELECT t.name, COUNT(nt.novel_id) as count
