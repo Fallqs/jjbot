@@ -13,6 +13,7 @@ export interface Novel {
   summary: string;
   tags: string[];
   chapters: Chapter[];
+  coverUrl?: string;
 }
 
 const PROXY_BASE = '/jjwxc/';
@@ -84,7 +85,7 @@ async function fetchHtml(path: string, useMy = false): Promise<{ doc: Document; 
 }
 
 export async function fetchNovelInfo(novelId: string): Promise<Novel> {
-  const { doc } = await fetchHtml(`/onebook.php?novelid=${novelId}`);
+  const { doc, htmlText } = await fetchHtml(`/onebook.php?novelid=${novelId}`);
 
   // Title
   const titleEl = doc.querySelector('div.noveltitle span.bigtext');
@@ -120,6 +121,28 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
     }
   }
 
+  // Cover
+  let coverUrl = '';
+  const coverMeta = doc.querySelector('meta[property="og:image"]');
+  if (coverMeta) {
+    coverUrl = coverMeta.getAttribute('content')?.trim() || '';
+  }
+  if (!coverUrl) {
+    const imgs = doc.querySelectorAll('img');
+    for (const img of imgs) {
+      const src = img.getAttribute('src') || '';
+      const width = img.getAttribute('width');
+      if (src && (width === '200' || /authorspace|novelimage|tmp\/backend/.test(src))) {
+        coverUrl = src;
+        break;
+      }
+    }
+  }
+  if (!coverUrl) {
+    const coverMatch = htmlText.match(/novelid=\d+&coverid=\d+&ver=[^"]+"\s+src="([^"]+)"/);
+    if (coverMatch) coverUrl = coverMatch[1];
+  }
+
   // Chapters
   const chapters: Chapter[] = [];
   const chapterRows = doc.querySelectorAll('tr[itemprop="chapter"]');
@@ -150,6 +173,7 @@ export async function fetchNovelInfo(novelId: string): Promise<Novel> {
     summary,
     tags,
     chapters,
+    coverUrl,
   };
 }
 

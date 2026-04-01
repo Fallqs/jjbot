@@ -83,8 +83,20 @@ function parseNovelPage(novelId, html) {
     coverUrl = coverMeta.attr('content') || '';
   }
   if (!coverUrl) {
-    const img = $('div.noveltitle img, div#novelimg img, img[src*="novelimages"]').first();
-    if (img.length) coverUrl = img.attr('src') || '';
+    // Method 1: Look for large cover image (width=200 is typical for JJWXC covers)
+    $('img').each((i, el) => {
+      if (coverUrl) return;
+      const src = $(el).attr('src') || '';
+      const width = $(el).attr('width');
+      if (src && (width === '200' || /authorspace|novelimage|tmp\/backend/.test(src))) {
+        coverUrl = src;
+      }
+    });
+  }
+  if (!coverUrl) {
+    // Method 2: Regex fallback on raw HTML for cover link pattern
+    const coverMatch = html.match(/novelid=\d+&coverid=\d+&ver=[^"]+"\s+src="([^"]+)"/);
+    if (coverMatch) coverUrl = coverMatch[1];
   }
 
   // Chapters
